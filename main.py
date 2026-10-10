@@ -262,7 +262,7 @@ async def members_command_handler(event):
         await send_error(event, e, context="members_command_handler")
 
 
-# --- Команда user @username: аватарка (фото или гифка) + инфа ---
+# --- Команда user @username ---
 @client.on(events.NewMessage(outgoing=True, pattern=r"^user\s+@?(\w+)$"))
 async def user_command_handler(event):
     try:
@@ -329,21 +329,13 @@ async def user_command_handler(event):
             f"Phone Number: {phone_str}"
         )
 
-        # --- Получаем аватарку: фото или гифка ---
+        # --- Получаем аватарку ---
         avatar_path = None
-        is_animated = False
         try:
             photos = await client.get_profile_photos(user, limit=1)
             if photos:
                 photo = photos[0]
-                is_animated = getattr(photo, "has_video", False)
-
-                if is_animated:
-                    avatar_path = await client.download_media(photo, file="temp_avatar.mp4")
-                    logger.info("Скачана анимированная аватарка (гифка)")
-                else:
-                    avatar_path = await client.download_media(photo, file="temp_avatar.jpg")
-                    logger.info("Скачана обычная аватарка (фото)")
+                avatar_path = await client.download_media(photo, file="temp_avatar.jpg")
         except Exception as e:
             logger.error(f"Ошибка скачивания аватарки: {e}")
 
@@ -354,8 +346,7 @@ async def user_command_handler(event):
                     event.chat_id,
                     avatar_path,
                     caption=caption,
-                    reply_to=event.id,
-                    supports_streaming=True
+                    reply_to=event.id
                 )
             finally:
                 try:
@@ -372,6 +363,25 @@ async def user_command_handler(event):
         await send_error(event, e, context="user_command_handler")
 
 
+# --- Команда help ---
+@client.on(events.NewMessage(outgoing=True, pattern=r"^help$"))
+async def help_command_handler(event):
+    try:
+        text = (
+            "Доступные команды:\n\n"
+            "ping\n"
+            "admins\n"
+            "members\n"
+            "user @username\n"
+            "help"
+        )
+        await safe_reply(event, text)
+        logger.info("Команда help обработана")
+    except Exception as e:
+        logger.error(f"Ошибка команды help: {e}")
+        await send_error(event, e, context="help_command_handler")
+
+
 # --- Запуск ---
 async def main():
     await start_web_server()
@@ -380,7 +390,7 @@ async def main():
     await client.start()
     me = await client.get_me()
     logger.info(f"Залогинен как: {me.first_name} (@{me.username})")
-    logger.info("Бот запущен. Команды: ping, admins, members, user. Автоответ в личке активен.")
+    logger.info("Бот запущен. Команды: ping, admins, members, user, help.")
     await client.run_until_disconnected()
 
 
