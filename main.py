@@ -2,10 +2,13 @@ import os
 import time
 import asyncio
 import logging
+from aiohttp import web
 from dotenv import load_dotenv
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 from telethon.tl.types import ChannelParticipantsAdmins
+from telethon.tl.functions.users import GetFullUserRequest
+from telethon.tl.functions.contacts import GetBirthdaysRequest
 from telethon.errors import SlowModeWaitError, FloodWaitError
 
 # --- Логирование ---
@@ -37,6 +40,22 @@ owner_last_message = {}
 
 # --- Время запуска бота ---
 BOT_START_TIME = time.time()
+
+
+# --- HTTP-сервер для Render ---
+async def health_check(request):
+    return web.Response(text="OK", status=200)
+
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get("/", health_check)
+    app.router.add_get("/health", health_check)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.getenv("PORT", 10000))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    logger.info(f"HTTP-сервер запущен на порту {port}")
 
 
 # --- Отправка с обработкой FloodWait ---
@@ -243,13 +262,109 @@ async def members_command_handler(event):
         await send_error(event, e, context="members_command_handler")
 
 
+# --- Команда user @username: аватарка + инфа ---
+@client.on(events.NewMessage(outgoing=True, pattern=r"^user\s+@?(\w+)$"))
+async def user_command_handler(event):
+    try:
+        username = event.pattern_match.group(1)
+
+        try:
+            user = await client.get_entity(username)
+        except Exception:
+            await safe_reply(event, f"Пользователь @{username} не найден.")
+            return
+
+        # Полная инфа (bio)
+        full_info = None
+        about = "Not specified"
+        try:
+            full_info = await client(GetFullUserRequest(user))
+            if full_info.full_user.about:
+                about = full_info.full_user.about
+        except Exception as e:
+            logger.warning(f"Не удалось получить full info: {e}")
+
+        # Имя
+        name = user.first_name or ""
+        if user.last_name:
+            name += f" {user.last_name}"
+        name = name.strip() or "Not specified"
+
+        # Username
+        user_name = f"@{user.username}" if user.username else "Not specified"
+
+        # Дата рождения
+        birthday_str = "Not specified"
+        try:
+            birthdays = await client(GetBirthdaysRequest())
+            for b in birthdays.birthdays:
+                if hasattr(b, 'user_id') and b.user_id == user.id:
+                    day = b.birthday.day
+                    month = b.birthday.month
+                    year = getattr(b.birthday, 'year', 0) or 0
+                    if year:
+                        birthday_str = f"{day:02d}.{month:02d}.{year}"
+                    else:
+                        birthday_str = f"{day:02d}.{month:02d}"
+                    break
+        except Exception as e:
+            logger.warning(f"Не удалось получить дни рождения: {e}")
+
+        # Номер телефона
+        phone_str = "Not specified"
+        if getattr(user, "phone", None):
+            phone_str = f"+{user.phone}"
+        elif full_info and getattr(full_info.full_user, "phone", None):
+            phone_str = f"+{full_info.full_user.phone}"
+
+        # Обрезаем about, если слишком длинный
+        if len(about) > 500:
+            about = about[:500] + "..."
+
+        caption = (
+            f"Name: {name}\n"
+            f"UserName: {user_name}\n"
+            f"About: {about}\n"
+            f"Date of birth: {birthday_str}\n"
+            f"Phone Number: {phone_str}"
+        )
+
+        # Скачиваем аватарку
+        photo_path = await client.download_profile_photo(user, file="temp_avatar.jpg")
+
+        if photo_path:
+            try:
+                await client.send_file(
+                    event.chat_id,
+                    photo_path,
+                    caption=caption,
+                    reply_to=event.id
+                )
+            finally:
+                try:
+                    os.remove(photo_path)
+                except Exception:
+                    pass
+        else:
+            await safe_reply(event, f"(Аватарка отсутствует)\n\n{caption}")
+
+        logger.info(f"Команда user: {username}")
+
+    except Exception as e:
+        logger.error(f"Ошибка команды user: {e}")
+        await send_error(event, e, context="user_command_handler")
+
+
 # --- Запуск ---
 async def main():
+    # Сначала HTTP-сервер, чтобы Render сразу увидел порт
+    await start_web_server()
+
     logger.info("Подключение к Telegram...")
     await client.start()
     me = await client.get_me()
     logger.info(f"Залогинен как: {me.first_name} (@{me.username})")
-    logger.info("Бот запущен. Команды: ping, admins, members. Автоответ в личке активен.")
+    logger.info("Бот запущен. Команды: ping, admins, members, user. Автоответ в личке активен.")
     await client.run_until_disconnected()
 
 
