@@ -35,6 +35,9 @@ OWNER_ACTIVITY_WINDOW = 30 * 60  # 30 минут
 # {peer_id: timestamp последнего ТВОЕГО сообщения}
 owner_last_message = {}
 
+# --- Время запуска бота ---
+BOT_START_TIME = time.time()
+
 
 # --- Отправка с обработкой FloodWait ---
 async def safe_reply(event, text):
@@ -110,15 +113,35 @@ async def autoreply_handler(event):
         await send_error(event, e, context="autoreply_handler")
 
 
-# --- Команда ping ---
+# --- Команда ping: пинг до Telegram + жив ли бот ---
 @client.on(events.NewMessage(outgoing=True, pattern=r"^ping$"))
 async def ping_command_handler(event):
     try:
         start = time.perf_counter_ns()
         await client.get_me()
         elapsed_ms = (time.perf_counter_ns() - start) // 1_000_000
-        await safe_reply(event, f"Ping: {elapsed_ms}мс")
-        logger.info(f"Команда ping: {elapsed_ms}мс")
+
+        uptime_seconds = int(time.time() - BOT_START_TIME)
+        hours = uptime_seconds // 3600
+        minutes = (uptime_seconds % 3600) // 60
+        seconds = uptime_seconds % 60
+
+        if hours > 0:
+            uptime_str = f"{hours}ч {minutes}м {seconds}с"
+        elif minutes > 0:
+            uptime_str = f"{minutes}м {seconds}с"
+        else:
+            uptime_str = f"{seconds}с"
+
+        text = (
+            f"Ping: {elapsed_ms}мс\n"
+            f"Bot: alive\n"
+            f"Uptime: {uptime_str}"
+        )
+
+        await safe_reply(event, text)
+        logger.info(f"Команда ping: {elapsed_ms}мс, uptime {uptime_str}")
+
     except Exception as e:
         logger.error(f"Ошибка команды ping: {e}")
         await send_error(event, e, context="ping_command_handler")
