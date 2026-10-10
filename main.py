@@ -132,7 +132,7 @@ async def autoreply_handler(event):
         await send_error(event, e, context="autoreply_handler")
 
 
-# --- Команда ping: пинг до Telegram + жив ли бот ---
+# --- Команда ping ---
 @client.on(events.NewMessage(outgoing=True, pattern=r"^ping$"))
 async def ping_command_handler(event):
     try:
@@ -207,7 +207,7 @@ async def admins_command_handler(event):
         await send_error(event, e, context="admins_command_handler")
 
 
-# --- Команда members: файл со всеми участниками (ответом на твоё соо) ---
+# --- Команда members: файл со всеми участниками ---
 @client.on(events.NewMessage(outgoing=True, pattern=r"^members$"))
 async def members_command_handler(event):
     try:
@@ -262,7 +262,7 @@ async def members_command_handler(event):
         await send_error(event, e, context="members_command_handler")
 
 
-# --- Команда user @username: аватарка + инфа ---
+# --- Команда user @username: аватарка (фото или гифка) + инфа ---
 @client.on(events.NewMessage(outgoing=True, pattern=r"^user\s+@?(\w+)$"))
 async def user_command_handler(event):
     try:
@@ -317,7 +317,7 @@ async def user_command_handler(event):
         elif full_info and getattr(full_info.full_user, "phone", None):
             phone_str = f"+{full_info.full_user.phone}"
 
-        # Обрезаем about, если слишком длинный
+        # Обрезаем about
         if len(about) > 500:
             about = about[:500] + "..."
 
@@ -329,20 +329,37 @@ async def user_command_handler(event):
             f"Phone Number: {phone_str}"
         )
 
-        # Скачиваем аватарку
-        photo_path = await client.download_profile_photo(user, file="temp_avatar.jpg")
+        # --- Получаем аватарку: фото или гифка ---
+        avatar_path = None
+        is_animated = False
+        try:
+            photos = await client.get_profile_photos(user, limit=1)
+            if photos:
+                photo = photos[0]
+                is_animated = getattr(photo, "has_video", False)
 
-        if photo_path:
+                if is_animated:
+                    avatar_path = await client.download_media(photo, file="temp_avatar.mp4")
+                    logger.info("Скачана анимированная аватарка (гифка)")
+                else:
+                    avatar_path = await client.download_media(photo, file="temp_avatar.jpg")
+                    logger.info("Скачана обычная аватарка (фото)")
+        except Exception as e:
+            logger.error(f"Ошибка скачивания аватарки: {e}")
+
+        # Отправляем
+        if avatar_path:
             try:
                 await client.send_file(
                     event.chat_id,
-                    photo_path,
+                    avatar_path,
                     caption=caption,
-                    reply_to=event.id
+                    reply_to=event.id,
+                    supports_streaming=True
                 )
             finally:
                 try:
-                    os.remove(photo_path)
+                    os.remove(avatar_path)
                 except Exception:
                     pass
         else:
@@ -357,7 +374,6 @@ async def user_command_handler(event):
 
 # --- Запуск ---
 async def main():
-    # Сначала HTTP-сервер, чтобы Render сразу увидел порт
     await start_web_server()
 
     logger.info("Подключение к Telegram...")
