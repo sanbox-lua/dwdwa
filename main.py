@@ -27,8 +27,8 @@ API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 SESSION_STRING = os.getenv("SESSION_STRING")
 
-# --- Groq API (прямо в коде) ---
-GROQ_API_KEY = "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"
+# --- Groq API ---
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "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")
 
 if not all([API_ID, API_HASH, SESSION_STRING]):
     raise SystemExit("Ошибка: проверь .env — не все переменные Telegram заданы")
@@ -38,7 +38,7 @@ client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
 # --- Настройки автоответа ---
 AUTO_REPLY_TEXT = "Скоро отвечу. Ответ написан автоответчиком, созданным владельцем этого аккаунта."
-OWNER_ACTIVITY_WINDOW = 30 * 60  # 30 минут
+OWNER_ACTIVITY_WINDOW = 30 * 60
 owner_last_message = {}
 
 # --- Время запуска ---
@@ -90,16 +90,14 @@ async def safe_reply(event, text):
     try:
         return await event.reply(text)
     except SlowModeWaitError as e:
-        logger.info(f"Медленный режим: ждём {e.seconds} сек...")
         await asyncio.sleep(e.seconds)
         return await event.reply(text)
     except FloodWaitError as e:
-        logger.warning(f"FloodWait: ждём {e.seconds} сек...")
         await asyncio.sleep(e.seconds)
         return await event.reply(text)
 
 
-# --- Отправка ошибки в Saved Messages ---
+# --- Ошибки ---
 async def send_error_to_saved(error, context=""):
     try:
         error_text = (
@@ -117,7 +115,6 @@ async def send_error_to_saved(error, context=""):
 
 
 async def send_error(event, error, context=""):
-    """В чат — 'Error', в Saved — полный текст."""
     try:
         await event.reply("Error")
     except Exception as e:
@@ -125,7 +122,7 @@ async def send_error(event, error, context=""):
     await send_error_to_saved(error, context)
 
 
-# --- Groq: контекст и запрос ---
+# --- Groq ---
 async def get_chat_context(chat_id, limit=12):
     try:
         me = await client.get_me()
@@ -198,9 +195,8 @@ async def owner_message_handler(event):
 async def autoreply_handler(event):
     if not event.is_private:
         return
-
     if GROQ_ENABLED:
-        return  # если Groq включён — автоответ не работает
+        return
 
     sender = await event.get_sender()
     if getattr(sender, "bot", False):
@@ -222,35 +218,33 @@ async def autoreply_handler(event):
         await send_error(event, e, context="autoreply_handler")
 
 
-# --- Groq on/off ---
-@client.on(events.NewMessage(outgoing=True, pattern=r"^groq\s+on$"))
-async def groq_on_handler(event):
+# --- ai on ---
+@client.on(events.NewMessage(outgoing=True, pattern=r"^ai\s+on$"))
+async def ai_on_handler(event):
     global GROQ_ENABLED
     try:
-        if not event.is_private:
-            return
         GROQ_ENABLED = True
-        await event.reply("groq on (все лички)")
-        logger.info("Groq включён")
+        await event.reply("ai on")
+        logger.info("AI включён")
     except Exception as e:
-        logger.error(f"Ошибка groq on: {e}")
-        await send_error_to_saved(e, context="groq_on")
+        logger.error(f"Ошибка ai on: {e}")
+        await send_error_to_saved(e, context="ai_on")
 
 
-@client.on(events.NewMessage(outgoing=True, pattern=r"^groq\s+off$"))
-async def groq_off_handler(event):
+# --- ai off ---
+@client.on(events.NewMessage(outgoing=True, pattern=r"^ai\s+off$"))
+async def ai_off_handler(event):
     global GROQ_ENABLED
     try:
-        if not event.is_private:
-            return
         GROQ_ENABLED = False
-        await event.reply("groq off")
-        logger.info("Groq выключен")
+        await event.reply("ai off")
+        logger.info("AI выключен")
     except Exception as e:
-        logger.error(f"Ошибка groq off: {e}")
-        await send_error_to_saved(e, context="groq_off")
+        logger.error(f"Ошибка ai off: {e}")
+        await send_error_to_saved(e, context="ai_off")
 
 
+# --- AI в личках с людьми ---
 @client.on(events.NewMessage(incoming=True))
 async def groq_reply_handler(event):
     global BOT_IS_REPLYING
@@ -272,21 +266,69 @@ async def groq_reply_handler(event):
             return
 
         BOT_IS_REPLYING = True
-        logger.info(f"Groq запрос в {event.chat_id}: {user_text[:50]}")
+        logger.info(f"AI запрос в {event.chat_id}: {user_text[:50]}")
         try:
             reply = await ask_groq_with_context(event.chat_id, user_text)
         except Exception as e:
-            logger.error(f"Ошибка Groq: {e}")
+            logger.error(f"Ошибка AI: {e}")
             await send_error_to_saved(e, context="ask_groq")
             BOT_IS_REPLYING = False
             return
         if reply:
             cleaned = clean_text(reply)
             await event.reply(cleaned)
-            logger.info(f"Groq ответ: {cleaned[:50]}")
+            logger.info(f"AI ответ: {cleaned[:50]}")
     except Exception as e:
-        logger.error(f"Ошибка groq_reply: {e}")
+        logger.error(f"Ошибка AI: {e}")
         await send_error_to_saved(e, context="groq_reply_handler")
+    finally:
+        await asyncio.sleep(1)
+        BOT_IS_REPLYING = False
+
+
+# --- AI в Избранном (Saved Messages) ---
+@client.on(events.NewMessage(outgoing=True))
+async def ai_saved_messages_handler(event):
+    global BOT_IS_REPLYING
+    if BOT_IS_REPLYING:
+        return
+    try:
+        if not event.is_private:
+            return
+        if not GROQ_ENABLED:
+            return
+
+        me = await client.get_me()
+        if event.chat_id != me.id:
+            return
+
+        user_text = event.message.message
+        if not user_text or user_text.startswith("/"):
+            return
+
+        # Пропускаем команды ai on/off
+        if user_text.lower() in ("ai on", "ai off"):
+            return
+
+        BOT_IS_REPLYING = True
+        logger.info(f"AI (Saved): {user_text[:50]}")
+
+        try:
+            reply = await ask_groq_with_context(event.chat_id, user_text)
+        except Exception as e:
+            logger.error(f"Ошибка AI Saved: {e}")
+            await send_error_to_saved(e, context="ai_saved")
+            BOT_IS_REPLYING = False
+            return
+
+        if reply:
+            cleaned = clean_text(reply)
+            await event.reply(cleaned)
+            logger.info(f"AI ответ (Saved): {cleaned[:50]}")
+
+    except Exception as e:
+        logger.error(f"Ошибка AI Saved: {e}")
+        await send_error_to_saved(e, context="ai_saved_outer")
     finally:
         await asyncio.sleep(1)
         BOT_IS_REPLYING = False
@@ -459,8 +501,8 @@ async def help_command_handler(event):
             "admins\n"
             "members\n"
             "user @username\n"
-            "groq on\n"
-            "groq off\n"
+            "ai on\n"
+            "ai off\n"
             "help"
         )
         await safe_reply(event, text)
